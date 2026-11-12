@@ -5,16 +5,16 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use goose_agent::extension_manager::ToolDisposition;
 use goose_sdk_types::custom_requests::{SourceEntry, SourceType};
 use rmcp::model::{CallToolResult, ContentBlock, ErrorData, JsonObject, Tool};
 use schemars::{schema_for, JsonSchema};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::agents::state_machine::ops_toolcalling::{
-    pending_advertised_tool_requests, tool_span, EXPIRED_APPROVAL_RESPONSE,
+use crate::agents::state_machine::extension_operation_host::{
+    pending_advertised_tool_requests, EXPIRED_APPROVAL_RESPONSE,
 };
+use crate::agents::state_machine::tool_hook_context::tool_span;
 use crate::agents::state_machine::{
     applied, messages_since_kickoff, not_applicable, yielded_with, Command, ConversationEffect,
     Emitter, GooseEffect, Operation, OperationResult,
@@ -24,6 +24,7 @@ use crate::conversation::message::Message;
 use crate::conversation::Conversation;
 use crate::session::Session;
 use crate::slash_commands::skill_slash_command::{format_installed_skills, runnable_skills};
+use goose_agent::extension_manager::ToolDisposition;
 
 pub(super) const LOAD_SKILL_TOOL_NAME: &str = "load_skill";
 
