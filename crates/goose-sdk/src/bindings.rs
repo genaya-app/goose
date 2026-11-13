@@ -1222,11 +1222,12 @@ impl CompactionMessage {
     }
 }
 
-/// Overrides for the summarization and summary-rendering prompts.
+/// Overrides for the summarization, summary-rendering, and in-band request prompts.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct CompactionTemplates {
     pub compaction: String,
     pub summary: String,
+    pub request: String,
 }
 
 impl From<CompactionTemplates> for goose_context_management::Templates {
@@ -1234,6 +1235,7 @@ impl From<CompactionTemplates> for goose_context_management::Templates {
         Self {
             compaction: value.compaction,
             summary: value.summary,
+            request: value.request,
         }
     }
 }
@@ -1254,6 +1256,7 @@ pub fn default_compaction_templates() -> CompactionTemplates {
     CompactionTemplates {
         compaction: templates.compaction,
         summary: templates.summary,
+        request: templates.request,
     }
 }
 
