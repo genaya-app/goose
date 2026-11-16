@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use goose_agent::extension_manager::ToolDisposition;
 use goose_sdk_types::custom_requests::{SourceEntry, SourceType};
 use rmcp::model::{CallToolResult, ContentBlock, ErrorData, JsonObject, Tool};
 use schemars::{schema_for, JsonSchema};
@@ -12,7 +13,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::state_machine::ops_toolcalling::{
-    pending_advertised_tool_requests, tool_span, ToolDisposition, EXPIRED_APPROVAL_RESPONSE,
+    pending_advertised_tool_requests, tool_span, EXPIRED_APPROVAL_RESPONSE,
 };
 use crate::agents::state_machine::{
     applied, messages_since_kickoff, not_applicable, yielded_with, Command, ConversationEffect,
