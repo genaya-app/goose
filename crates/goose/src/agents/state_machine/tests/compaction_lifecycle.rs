@@ -313,6 +313,53 @@ async fn a_failed_in_band_request_reports_the_error_and_restores_the_prompt() ->
 }
 
 #[tokio::test]
+async fn in_band_compaction_does_not_spend_the_turn_budget() -> Result<()> {
+    let (pipeline, api) = test_pipeline().await?;
+    let pipeline = pipeline.with_max_turns(2);
+    api.on("fill the context").reply("filled");
+    api.on(WRITE_WORKING_NOTES).reply("inband-notes");
+    api.on("Your context was compacted")
+        .reply("continued after compaction");
+    pipeline.run(["fill the context"]).await?;
+    pipeline
+        .set_total_tokens((pipeline.context_limit() as f64 * 0.81) as i64)
+        .await;
+
+    let compacted = pipeline.run(["continue"]).await?;
+
+    assert_eq!(compacted.history_replacements(), 1);
+    compacted.assert_message(-1, Agent, "continued after compaction");
+    assert!(compacted.emitted_error_kinds().is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_first_turn_tool_loop_compacts_proactively() -> Result<()> {
+    let (pipeline, api) = test_pipeline().await?;
+    api.on("add one").call(ADD, value(1));
+    api.on(WRITE_WORKING_NOTES).reply("inband-notes");
+    api.on("Your context was compacted")
+        .reply("continued after compaction");
+
+    let big_prompt = format!(
+        "add one {}",
+        "x".repeat((pipeline.context_limit() as f64 * 0.7) as usize)
+    );
+    let result = pipeline.run([big_prompt.as_str()]).await?;
+
+    let calls = api.calls();
+    result.assert_message(-1, Agent, "continued after compaction");
+    assert_eq!(result.history_replacements(), 1);
+    assert!(calls
+        .iter()
+        .any(|call| call.input_contains(WRITE_WORKING_NOTES)));
+    assert!(result.emitted_error_kinds().is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn context_errors_compact_and_retry() -> Result<()> {
     let (pipeline, api) = test_pipeline().await?;
     api.on("overflow once").context_limit_error("too long");

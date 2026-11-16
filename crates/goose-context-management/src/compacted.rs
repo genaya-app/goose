@@ -49,15 +49,10 @@ pub fn latest_prompt(messages: &[Message]) -> Option<usize> {
 }
 
 fn reissued(prompt: &Message) -> Message {
-    prompt
-        .agent_visible_content()
-        .content
-        .into_iter()
-        .filter(|content| matches!(content, MessageContent::Text(_)))
-        .fold(
-            Message::user().with_metadata(MessageMetadata::agent_only()),
-            Message::with_content,
-        )
+    prompt.agent_visible_content().content.into_iter().fold(
+        Message::user().with_metadata(MessageMetadata::agent_only()),
+        Message::with_content,
+    )
 }
 
 /// Lays out the compacted conversation: every message becomes agent-invisible,

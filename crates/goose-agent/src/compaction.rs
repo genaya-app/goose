@@ -10,6 +10,7 @@
 //! Place the operation before everything that reacts to an assistant reply,
 //! so the summary is harvested before tool execution or turn-end logic sees it.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -150,13 +151,29 @@ fn replied_since_last_summary(conversation: &Conversation) -> bool {
         .any(|message| message.role == Role::Assistant && message.metadata.inference.is_some())
 }
 
-/// A prompt with nothing before it has no history to summarize; if it does not
-/// fit, the context-length recovery handles it.
-fn has_history_before_prompt(messages: &[Message]) -> bool {
-    latest_prompt(messages).is_none_or(|prompt| {
-        messages[..prompt]
-            .iter()
-            .any(|message| message.is_agent_visible() && !message.is_turn_context())
+/// Operations ahead of tool execution may answer part of a tool batch; the
+/// rest still runs, and archiving the requests would orphan their results.
+fn has_outstanding_tool_calls(messages: &[Message]) -> bool {
+    let answered: HashSet<&str> = messages
+        .iter()
+        .flat_map(Message::get_tool_response_ids)
+        .collect();
+    messages
+        .iter()
+        .filter(|message| message.is_agent_visible() && message.role == Role::Assistant)
+        .flat_map(|message| message.content.iter())
+        .filter_map(MessageContent::as_tool_request)
+        .any(|request| {
+            !request.was_executed_externally() && !answered.contains(request.id.as_str())
+        })
+}
+
+/// A lone prompt has no history to summarize; if it does not fit, the
+/// context-length recovery handles it.
+fn has_history_beyond_prompt(messages: &[Message]) -> bool {
+    let prompt = latest_prompt(messages);
+    messages.iter().enumerate().any(|(index, message)| {
+        Some(index) != prompt && message.is_agent_visible() && !message.is_turn_context()
     })
 }
 
@@ -189,13 +206,18 @@ fn agent_visibility(message: &Message, agent_visible: bool) -> Result<Conversati
     })
 }
 
-/// The prompt an in-band request hid while the model summarized: it sits right
-/// before the request, since both leave the operation in one step.
+/// The prompt an in-band request hid while the model summarized: the last
+/// message before the request, apart from turn context that followed the
+/// prompt before the request was appended.
 fn hidden_prompt(messages: &[Message], request_index: usize) -> Option<usize> {
-    request_index.checked_sub(1).filter(|&index| {
-        let message = &messages[index];
-        message.metadata.operation_note(NAME, PROMPT_NOTE).is_some() && !message.is_agent_visible()
-    })
+    messages[..request_index]
+        .iter()
+        .rposition(|message| !message.is_turn_context())
+        .filter(|&index| {
+            let message = &messages[index];
+            message.metadata.operation_note(NAME, PROMPT_NOTE).is_some()
+                && !message.is_agent_visible()
+        })
 }
 
 /// Tool calls in a compaction reply never run; closing them keeps tool
@@ -459,10 +481,11 @@ impl CompactionOperation {
         if let Some(kind) = trailing_error(conversation) {
             if kind != MessageErrorKind::ContextLengthExceeded {
                 let mut effects = Self::abandon(messages, request_index)?;
-                if let Some(error) = conversation.last().and_then(Message::error) {
-                    effects.push(E::from(emit.message(
-                        Message::assistant().with_error(error.kind, error.message.clone()),
-                    )));
+                if let Some(error) = conversation.last() {
+                    let mut shown = error.clone();
+                    shown.id = None;
+                    shown.metadata.user_visible = true;
+                    effects.push(E::from(emit.message(shown)));
                 }
                 return applied(effects);
             }
@@ -630,7 +653,8 @@ impl<S: MachineSession, E: CompactionEffect> Operation<S, E> for CompactionOpera
         .await?
         .is_none()
             || !replied_since_last_summary(conversation)
-            || !has_history_before_prompt(messages)
+            || !has_history_beyond_prompt(messages)
+            || has_outstanding_tool_calls(messages_since_kickoff(conversation)?)
         {
             return not_applicable();
         }
@@ -650,5 +674,51 @@ impl<S: MachineSession, E: CompactionEffect> Operation<S, E> for CompactionOpera
                 .await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_prompt_is_found_across_turn_context() {
+        let mut prompt = Message::user()
+            .with_text("the prompt")
+            .with_visibility(true, false);
+        prompt
+            .metadata
+            .set_operation_note(NAME, PROMPT_NOTE, serde_json::Value::Bool(true));
+        let turn_context = Message::user()
+            .with_text("<turn-context>now</turn-context>")
+            .with_metadata(MessageMetadata::agent_only().with_turn_context());
+        let request = Message::user().with_text("write working notes");
+        let messages = [prompt, turn_context, request];
+
+        assert_eq!(hidden_prompt(&messages, 2), Some(0));
+        assert_eq!(hidden_prompt(&messages[1..], 1), None);
+    }
+
+    #[test]
+    fn a_partly_answered_tool_batch_is_outstanding() {
+        let batch = Message::assistant()
+            .with_tool_request(
+                "skill",
+                Ok(rmcp::model::CallToolRequestParams::new("load_skill")),
+            )
+            .with_tool_request(
+                "shell",
+                Ok(rmcp::model::CallToolRequestParams::new("shell")),
+            );
+        let partial = Message::user()
+            .with_tool_response("skill", Ok(rmcp::model::CallToolResult::success(vec![])));
+        let rest = Message::user()
+            .with_tool_response("shell", Ok(rmcp::model::CallToolResult::success(vec![])));
+
+        assert!(has_outstanding_tool_calls(&[
+            batch.clone(),
+            partial.clone()
+        ]));
+        assert!(!has_outstanding_tool_calls(&[batch, partial, rest]));
     }
 }
