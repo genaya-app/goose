@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use goose::action_required_manager::ElicitationOutcome;
 use goose::agents::extension::{Envs, ExtensionConfig};
-use goose::agents::extension_manager::{CallRequest, ClientContext, ExtensionSet};
+use goose::agents::extension_manager::{CallRequest, ClientContext};
 use goose::agents::mcp_client::GooseMcpClientCapabilities;
 use goose::agents::tool_snapshot::ToolSnapshot;
 use goose::agents::GoosePlatform;
@@ -111,6 +111,7 @@ async fn fixture(mcpui: bool, protocol_version: Option<ProtocolVersion>) -> Fixt
             mcpui,
             host_info: None,
             elicitation_handler: None,
+            action_required_elicitation: true,
             protocol_version,
         },
     };
@@ -156,12 +157,15 @@ impl Fixture {
     ) -> ToolSnapshot {
         self.manager
             .resolve_tools(
-                &ExtensionSet::new(
-                    &session.id,
-                    Some(session.working_dir.clone()),
-                    configs.to_vec(),
-                )
-                .unwrap(),
+                &self
+                    .manager
+                    .extension_set(
+                        &session.id,
+                        Some(session.working_dir.clone()),
+                        configs.to_vec(),
+                        session.container.clone(),
+                    )
+                    .unwrap(),
             )
             .await
     }
@@ -645,7 +649,10 @@ async fn extension_lifecycle_across_real_transports(stdio_version: ProtocolVersi
         .await
         .contains("old workspace"));
 
-    assert!(ExtensionSet::new("s", None, vec![todo.clone(), platform("Todo")]).is_err());
+    assert!(fx
+        .manager
+        .extension_set("s", None, vec![todo.clone(), platform("Todo")], None)
+        .is_err());
 }
 
 /// Everything that crosses the wire besides a plain call: per-session tool
@@ -998,6 +1005,7 @@ async fn test_replayed_session(
             mcpui: true,
             host_info: None,
             elicitation_handler: None,
+            action_required_elicitation: true,
             protocol_version: None,
         },
     };
@@ -1008,7 +1016,12 @@ async fn test_replayed_session(
 
     #[allow(clippy::redundant_closure_call)]
     let result = (async || -> Result<(), Box<dyn std::error::Error>> {
-        let set = ExtensionSet::new("test-session-id", None, vec![extension_config])?;
+        let set = extension_manager.extension_set(
+            "test-session-id",
+            None,
+            vec![extension_config],
+            None,
+        )?;
         let mut results = Vec::new();
         for tool_call in tool_calls {
             let mut new_call = CallToolRequestParams::new(format!("test__{}", tool_call.name));
